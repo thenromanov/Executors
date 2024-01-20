@@ -1,8 +1,8 @@
 # Executors framework
 
-## Введение
+## Introduction
 
-В предыдущих задачах вам нужно было распараллелить вычисления. Если немного обобщить, то код всех ваших решений выглядел примерно так:
+To summarize, the code of all parallel computing looks something like this:
 
 ```c++
 
@@ -10,135 +10,131 @@ class Output;
 class Input;
 
 Output Compute(const Input& inputs) {
-    // Select concurrency level
-    int num_threads = std::thread::hardware_concurrency();
+// Select concurrency level
+int num_threads = std::thread::hardware_concurrency();
 
-    // Split input into tasks
-    std::vector<Tasks> tasks = SplitIntoSubtasks(inputs, num_threads);
+// Split input into tasks
+std::vector<Tasks> tasks = SplitIntoSubtasks(inputs, num_threads);
 
-    // Launch threads
-    std::vector<std::thread> threads;
-    for (int i = 0; i < num_threads; ++i) {
-        threads.emplace_back([i, &inputs, &tasks] {
-            ComputeSubtask(&tasks[i], input);
-        });
-    }
+// Launch threads
+std::vector<std::thread> threads;
+for (int i = 0; i < num_threads; ++i) {
+threads.emplace_back([i, &inputs, &tasks] {
+ComputeSubtask(&tasks[i], input);
+});
+}
 
-    // Join all threads
-    for (auto& t : threads) t.join();
+// Join all threads
+for (auto& t : threads) t.join();
 
-    // Aggregate
-    return Aggregate(tasks, input);
+// Aggregate
+return Aggregate(tasks, input);
 }
 ```
 
-Если внимательно посмотреть на код, то можно заметить, что в нём смешаны 2
-независимых действия:
-  
-  1. Большая задача разбивается на небольшие независимые подзадачи. Затем
-      решения подзадач объединяются вместе. Этот код специфичен для каждого алгоритма.
+If you look at the code carefully, you will notice that 2
+independent actions are mixed in it:
 
-  2. Код решает сколько потоков запускать, как их запускать и когда
-      их завершать. Этот код везде одинаковый.
+1. A large task is divided into small independent subtasks. Then
+The solutions to the subtasks are combined together. This code is specific to each algorithm.
 
-С первым пунктом все хорошо, а вот со вторым есть проблемы.
+2. The code decides how many threads to run, how to run them, and when
+to complete them. This code is the same everywhere.
 
-* Пользователь не может контролировать сколько потоков будет запущено.
-  _Код действует эгоистично и занимает все ядра на машине._
+Everything is fine with the first point, but there are problems with the second.
 
-* Неудобно использовать такой код внутри другого параллельного алгоритма.
-  _Например если на первом уровне разобъем задачу на 10 частей и каждую захотим решить с помощью `Compute()`, то у нас запустится `10 * hardware concurrency` потоков._
+* The user cannot control how many threads will be started.
+The code acts selfishly and takes up all the cores on the machine._
 
-* Нельзя отменить вычисление, нельзя следить за прогрессом.
+* It is inconvenient to use such code inside another parallel algorithm.
+For example, if we split the task into 10 parts at the first level and want to solve each one using `Compute()`, then we will start `10 * hardware concurrency` threads._
 
-Все проблемы появляются из того, что код сам занимается созданием
-потоков. Мы хотим вынести это решение на самый высокий уровень, а в
-коде оставить только разбиение на независимые подзадачи. В этом
-задании вам нужно написать библиотеку помогающую выполнить такое разделение.
+* You cannot cancel the calculation, you cannot monitor the progress.
 
-### Executors и Tasks
+All problems arise from the fact that the code itself is engaged in creating
+threads. We want to take this decision to the highest level, and in
+The code should only be split into independent subtasks. In this
+assignment, you need to write a library to help you perform this separation.
 
-**Disclaimer:** интерфейсы Task и Executor в этой задаче не претендуют
-  на элегантность и эффективность.
+### Executors and Tasks
 
-* `Task` - это какой-то кусок вычислений. Сам код вычисления находится в
-методе run() и определяется пользователем.
-* `Executor` - это набор потоков, которые могут выполнять `Task`-и. 
-* `Executor` *должен* запускать потоки в конструкторе, во время работы новых потоков создаваться не должно.
-* Чтобы начать выполнять `Task`, пользователь должен отправить его в `Executor` с помощью метода
+* A `Task` is some kind of piece of computing. The calculation code itself is in
+the run() method and is defined by the user.
+*An `Executor' is a set of threads that can perform a `Task' and.
+* `Executor` *must* run threads in the constructor, no new threads should be created during operation.
+* To start executing a `Task`, the user must send it to the 'Executor` using the method
 `Submit()`.
-* После этого, пользователь может дождаться пока `Task` завершится, позвав метод `Task::Wait`.
+* After that, the user can wait until the `Task` is completed by calling the `Task::Wait` method.
 
 ```c++
 class MyPrimeSplittingTask : public Task {
-    Params params_;
+Params params_;
 public:
-    MyPrimeSplittingTask(Params params) : params_(params) {}
-    bool is_prime = false;
-    virtual void Run() {
-        is_prime = check_is_prime(params_);
-    }
+MyPrimeSplittingTask(Params params) : params_(params) {}
+bool is_prime = false;
+virtual void Run() {
+is_prime = check_is_prime(params_);
+}
 }
 
 bool DoComputation(std::shared_ptr<Executor> pool, Params params) {
-    auto my_task = std::make_shared<MyPrimeSplittingTask>(params);
-    pool->Submit(my_task);
-    my_task.Wait();
-    return my_task->is_prime;
+auto my_task = std::make_shared<MyPrimeSplittingTask>(params);
+pool->Submit(my_task);
+my_task.Wait();
+return my_task->is_prime;
 }
 ```
 
-* `Task` может завершиться успешно (`IsCompleted`), с ошибкой
-  (`IsFailed`) и быть отменён (`IsCanceled`). После того, как с ним
-  произошло одно из этих событий - он считается выполненным
-  (`IsFinished`).
+* `Task` may complete successfully (`IsCompleted`), with an error
+(`IsFailed') and be cancelled (`isCanceled'). After
+one of these events has happened to it, it is considered completed
+(`isFinished').
 
-* Пользователь может в любой момент отменить `Task` с помощью метода
-  `Cancel()`. В этом случае, если выполнение `Task`а еще не
-  началось, то оно и не должно начаться.
+* The user can cancel the `Task` at any time using the method
+`Cancel()`. In this case, if the execution of the `Task' has not yet been completed
+If it has begun, then it should not begin.
 
-* `Task` может иметь зависимости. Например в задаче reduce сначала
-  должны были выполниться reduce-ы по кускам вектора, а потом один
-  финальный reduce по промежуточным значениям. Пользователь может
-  сказать, что один `Task` должен выполняться только после того как
-  выполнился какой-то другой `Task`, позвав метод
-  `Task::AddDependency`.
+* `Task` may have dependencies. For example, in the reduce task, first
+The reduction should have been performed in chunks of the vector, and then one
+final reduction in intermediate values. The user can
+to say that one `Task` should be executed only after some
+other `Task` has been executed by calling the method
+`Task::AddDependency`.
 
-* `Task` может иметь триггеры (`Task::AddTrigger`). В таком случае он должен начать
-  выполнение после того как хотя бы один триггер завершился.
+* `Task` can have triggers (`Task::AddTrigger'). In this case, it should start
+execution after at least one trigger has completed.
 
-* `Task` может иметь один триггер по времени
-  (`Task::SetTimeTrigger`). В этом случае он должен начать
-  выполнение если наступило время `deadline`.
+* A `Task` can have one time trigger
+(`Task::SetTimeTrigger`). In this case, it should start
+execution if the `deadline` time has arrived.
 
-* В общем случае, `Executor::Submit` не должен начинать выполнение
-  сразу, а дожидаться условия:
-  * _Или_ есть зависомости и все они выполнились
-  * _Или_ один из триггеров выполнился
-  * _Или_ выставлен `deadline`, и наступило время `deadline`.
-  Если у таска нет зависимостей, нет триггеров и не выставлен deadline,
-  то его можно выполнять сразу же.
-  Пока `Submit` на таск не вызван, выполнять его нельзя.
+* In general, the `Executor::Submit` should not start execution
+immediately, but wait for the condition:
+* _ Or_ there are dependencies and they are all fulfilled
+* _ Or_ one of the triggers has been executed
+* _ Or_ the `deadline` is set, and it's time for the `deadline`.
+If the task has no dependencies, no triggers, and no deadline is set,
+then it can be performed immediately.
+Until `Submit` is called for the task, it cannot be executed.
 
-* `Executor` предоставляет API для того, чтобы остановить выполнение.
-  * `Executor::StartShutdown` - начинает процесс остановки. Таски, которые 
-    были посланы после `StartShutdown` должны сразу переходить в состояние Canceled.
-    Функция может быть вызвана несколько раз.
-  * `Executor::WaitShutdown` - блокируется, пока Executor не остановится.
-    Функция может быть вызвана несколько раз.
-  * `Executor::~Executor` - неявно делает shutdown и дожидается завершения потоков.
+* The `Executor` provides an API to stop execution.
+* `Executor::StartShutdown' - starts the shutdown process. Tasks that
+were sent after the `StartShutdown` should immediately switch to the Cancelled state.
+The function can be called several times.
+* `Executor::WaitShutdown' - is blocked until the Executor stops.
+The function can be called several times.
+* `Executor::~Executor` - implicitly does shutdown and waits for threads to finish.
 
 ### Futures
 
-Интерфейсы `Task` и `Executor` являются довольно многословными, во второй
-части задания вам нужно будет реализовать класс `Future` и несколько комбинаторов к нему.
+The `Task` and `Executor` interfaces are quite verbose, in the second
+part of the task you will need to implement the `Future` class and several combinators to it.
 
-* `Future` - это `Task`, у которого есть результат (какое-то значение).
+* `Future` is a `Task' that has a result (some value).
 
-* Интерфейсы комбинаторов определены в классе `Executor`:
-  * `Invoke(cb)` - выполнить `cb` внутри `Executor`-а, результат вернуть через `Future`.
-  * `Then(input, cb)` - выполнить `cb`, после того как закончится `input`. Возвращает `Future` на результат `cb` не дожидаясь выполнения `input`.
-  * `WhenAll(vector<FuturePtr<T>> ) -> FuturePtr<vector<T>>` - собирает результат нескольких `Future` в один.
-  * `WhenFirst(vector<FuturePtr<T>>) -> FuturePtr<T>` - возвращает результат, который появится первым.
-  * `WhenAllBeforeDeadline(vector<FuturePtr<T>>, deadline) -> FuturePtr<vector<T>>` - возвращает все результаты, которые успели появиться до deadline.
-
+* Combinator interfaces are defined in the `Executor' class:
+* `Invoke(cb)` - execute `cb` inside `Executor`-and return the result via `Future`.
+* `Then(input, cb)` - execute `cb` after the `input` ends. Returns `Future` to the result of `cb` without waiting for the execution of `input`.
+* `WhenAll(vector<FuturePtr<T>>) -> FuturePtr<vector<T>>` - collects the result of several `Futures` into one.
+* `WhenFirst(vector<FuturePtr<T>>) -> FuturePtr<T>` - returns the result that appears first.
+* `WhenAllBeforeDeadline(vector<FuturePtr<T>>, deadline) -> FuturePtr<vector<T>>` - returns all the results that appeared before the deadline.
